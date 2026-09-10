@@ -1,0 +1,11 @@
+{
+  "domain": "myride_k12",
+  "name": "MyRide K-12",
+  "codeowners": ["@REPLACE_WITH_YOUR_GITHUB_USERNAME"],
+  "config_flow": true,
+  "documentation": "https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/myride_k12",
+  "issue_tracker": "https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/myride_k12/issues",
+  "iot_class": "cloud_push",
+  "requirements": [],
+  "version": "0.1.0"
+}
