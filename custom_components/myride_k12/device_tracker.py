@@ -56,7 +56,7 @@ class MyRideTracker(MyRideStudentEntity, TrackerEntity):
         snap = self.snapshot
         if snap is None:
             return {}
-        return {
+        attrs: dict[str, Any] = {
             "bus": snap.bus,
             "is_substitute": snap.is_substitute,
             "heading": snap.heading,
@@ -64,3 +64,7 @@ class MyRideTracker(MyRideStudentEntity, TrackerEntity):
             "log_time": snap.log_time,
             "live": self.coordinator.is_live(snap),
         }
+        if snap.log_time_changed_at is not None:
+            elapsed = self.coordinator.hass.loop.time() - snap.log_time_changed_at
+            attrs["seconds_since_last_fix"] = round(elapsed)
+        return attrs

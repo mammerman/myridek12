@@ -139,8 +139,12 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
     # ── Live stream (background task, independent of the polling schedule above) ──
 
     async def _async_stream_loop(self) -> None:
+        first_attempt = True
         while True:
             started_at = self.hass.loop.time()
+            if first_attempt:
+                LOGGER.info("Connecting to the MyRide live location stream")
+                first_attempt = False
             try:
                 await self.api.async_watch(self._on_location, self._on_event)
             except MyRideAuthError as err:
@@ -148,7 +152,11 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
                 self.config_entry.async_start_reauth(self.hass)
                 return
             except (MyRideConnectionError, TimeoutError) as err:
-                LOGGER.debug("MyRide stream disconnected, will reconnect: %s", err)
+                # Deliberately INFO, not DEBUG: a connection that never succeeds
+                # is exactly what produces "device_tracker with no lat/lon and
+                # no error" - this needs to be visible without the user having
+                # to turn on debug logging first to find out anything's wrong.
+                LOGGER.info("MyRide stream disconnected (%s), reconnecting", err)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - a bug in the stream loop shouldn't kill HA's task forever
@@ -166,7 +174,17 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
         bus = loc.get("assetUniqueId")
         student_id = self._active_bus_to_student.get(bus) if bus else None
         if student_id is None:
-            return  # not one of our students' assigned vehicles today
+            # Debug, not silent: if this fires a lot, `bus` not matching any
+            # value in _active_bus_to_student (e.g. a name-format mismatch
+            # between /api/student's activeVehicle and the hub's
+            # assetUniqueId) is exactly the kind of thing that would produce
+            # "connected fine, but lat/lon never populate".
+            LOGGER.debug(
+                "Location for untracked bus %r ignored (tracking: %s)",
+                bus,
+                sorted(self._active_bus_to_student),
+            )
+            return
         current = (self.data or {}).get(student_id)
         if current is None:
             return
