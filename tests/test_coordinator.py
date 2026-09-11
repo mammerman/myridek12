@@ -50,7 +50,7 @@ async def coordinator(hass):
             todays_runs=[],
         )
     }
-    coord._active_bus_to_student = {"BUS 057": "2008416"}
+    coord._active_bus_to_student = {"BUS 057": {"2008416"}}
     yield coord
     # The coordinator registers a periodic staleness-recheck timer via
     # entry.async_on_unload(), which normally gets cancelled when the config
@@ -85,6 +85,91 @@ def test_location_for_tracked_bus_updates_snapshot(coordinator):
     assert snap.speed == 26
     assert snap.log_time == "t1"
     assert snap.log_time_changed_at is not None
+
+
+def test_location_for_shared_bus_updates_every_rider(coordinator):
+    """
+    Siblings on the same route share a bus number.
+
+    One NewLocation event for that bus must update ALL of them, not just
+    whichever student happened to be stored last.
+    """
+    coordinator.data["3011927"] = StudentSnapshot(
+        unique_id="3011927",
+        first_name="Margaret",
+        last_name="Gregory",
+        current_run=RunInfo(
+            run_id=1,
+            bus_number="BUS 057",
+            active_vehicle="BUS 057",
+            is_substitute=False,
+            window_start=8 * 60,
+            window_end=9 * 60,
+        ),
+        todays_runs=[],
+    )
+    coordinator._active_bus_to_student = {"BUS 057": {"2008416", "3011927"}}
+
+    coordinator._on_location(
+        {
+            "assetUniqueId": "BUS 057",
+            "latitude": 40.6892,
+            "longitude": -74.0445,
+            "heading": 138,
+            "speed": 26,
+            "logTime": "t1",
+        }
+    )
+
+    for student_id in ("2008416", "3011927"):
+        snap = coordinator.data[student_id]
+        assert snap.latitude == 40.6892
+        assert snap.speed == 26
+        assert snap.log_time == "t1"
+        assert snap.log_time_changed_at is not None
+
+
+async def test_roster_poll_accumulates_students_on_a_shared_bus(coordinator):
+    """
+    Regression test for the original bug.
+
+    Two students whose roster entries both resolve to the same
+    activeVehicle must BOTH end up in _active_bus_to_student[bus] - not
+    have the second overwrite the first.
+    """
+    lucas_run = {
+        "runId": 1,
+        "busNumber": "BUS 057",
+        "activeVehicle": "BUS 057",
+        "stopsInfo": [{"stopTime": "1900-01-01T08:45:00"}],
+    }
+    margaret_run = {
+        "runId": 2,
+        "busNumber": "BUS 057",
+        "activeVehicle": "BUS 057",
+        "stopsInfo": [{"stopTime": "1900-01-01T08:47:00"}],
+    }
+    raw_students = [
+        {
+            "uniqueId": 2008416,
+            "firstName": "Lucas",
+            "lastName": "Gregory",
+            "runInfo": [lucas_run],
+        },
+        {
+            "uniqueId": 3011927,
+            "firstName": "Margaret",
+            "lastName": "Gregory",
+            "runInfo": [margaret_run],
+        },
+    ]
+
+    with patch.object(
+        coordinator.api, "async_get_students", return_value=raw_students
+    ):
+        await coordinator._async_update_data()
+
+    assert coordinator._active_bus_to_student["BUS 057"] == {"2008416", "3011927"}
 
 
 def test_is_live_false_before_any_message(coordinator):
