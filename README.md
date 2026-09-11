@@ -12,54 +12,6 @@ SignalR hub. That project ships as a standalone Node.js service that publishes
 to MQTT; this one runs inside Home Assistant directly, with a config flow, a
 proper reauth flow, and entities native to HA.
 
-## Status
-
-**Scaffold with real test coverage, not yet run against a live Home Assistant
-UI or a real bus route.** The API/auth/streaming logic (`api.py`,
-`student_tracker.py`) was validated against the real MyRide hub with a
-standalone spike script before being ported here. From there:
-
-- `custom_components/myride_k12/` has 25 tests in `tests/`, run against a real
-  `pytest-homeassistant-custom-component` harness (an actual `HomeAssistant`
-  instance, not just imports) - covering Cognito auth, `/api/student`,
-  negotiate, the full UI config flow (success/invalid-token/duplicate-account),
-  the native reauth flow (including rejecting a token for the *wrong* MyRide
-  account), and the staleness/live detection logic, including the exact
-  repeated-stale-heartbeat scenario observed during the real spike run.
-  `student_tracker.py`'s run-selection logic passes the same cases as the
-  original bridge's own test suite.
-- **Not yet covered**: a real WebSocket connection from within HA (tests mock
-  the HTTP calls but not the socket itself), and anything only visible in an
-  actual running instance - the frontend rendering, a real config flow click
-  through the UI, `strings.json`/`translations` actually loading, hassfest/HACS
-  validation.
-- Test environment note: these tests ran against `homeassistant==2025.1.4`ish
-  (whatever the sandbox's package index had cached), not the `2026.6.4`
-  pinned in `requirements_dev.txt`/`hacs.json`. Re-run `pytest` inside the
-  devcontainer (which has real internet access) before trusting this further -
-  a newer HA version could surface API differences these tests didn't catch.
-
-Next step: stand up the devcontainer (`scripts/setup` then `scripts/develop`),
-re-run `pytest` there, then do a real config flow + a real bus route.
-
-## What we learned from the spike (and how this integration handles it)
-
-- **Negotiating registers you as a watcher independently.** You don't need the
-  official app open first - a fresh `negotiate` call each connection attempt
-  activates the GPS relay for your own students' buses.
-- **The hub re-broadcasts a stale cached position on some heartbeat interval**,
-  even when a bus isn't actively reporting fresh GPS - same lat/lng, same
-  `logTime`, arriving repeatedly. There's no explicit "trip started" or "trip
-  ended" event. So instead of a speed-based "moving" sensor (the original
-  bridge's approach), each student has a `live` binary sensor driven by
-  whether `logTime` has actually *advanced* recently - see
-  `const.DEFAULT_STALE_AFTER` and `coordinator.is_live()`.
-- **District stop times are local wall-clock times.** The original bridge
-  needed a manual `TZ` environment variable to interpret them correctly. This
-  integration uses Home Assistant's own configured timezone instead
-  (`homeassistant.util.dt.now()`), so there's one less setting to get wrong -
-  as long as HA's timezone matches the district's, which is the common case.
-
 ## Installation
 
 Not yet published. For now:
