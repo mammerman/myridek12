@@ -61,7 +61,10 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
             async_get_clientsession(hass), entry.data[CONF_REFRESH_TOKEN]
         )
         self.api.tenant_id = entry.data.get("tenant_id")
-        self._active_bus_to_student: dict[str, str] = {}
+        # A bus can carry more than one tracked student (e.g. siblings on the
+        # same route), so this maps each active vehicle to every student
+        # currently riding it - not just one.
+        self._active_bus_to_student: dict[str, set[str]] = {}
         self._backoff = 1.0
         entry.async_on_unload(
             async_track_time_interval(
@@ -103,7 +106,7 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
         self._persist_rotated_token_if_needed()
 
         data = dict(self.data or {})
-        active_map: dict[str, str] = {}
+        active_map: dict[str, set[str]] = {}
         for raw in raw_students:
             new_snap = normalize_student(raw)
             previous = data.get(new_snap.unique_id)
@@ -121,7 +124,11 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
                 )
             data[new_snap.unique_id] = new_snap
             if new_snap.bus:
-                active_map[new_snap.bus] = new_snap.unique_id
+                # Siblings on the same route share a bus number here, so this
+                # must accumulate - not overwrite - or whichever student is
+                # last in raw_students silently claims the bus and the rest
+                # never get a location update.
+                active_map.setdefault(new_snap.bus, set()).add(new_snap.unique_id)
 
         self._active_bus_to_student = active_map
         return data
@@ -172,8 +179,8 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
 
     def _on_location(self, loc: dict[str, Any]) -> None:
         bus = loc.get("assetUniqueId")
-        student_id = self._active_bus_to_student.get(bus) if bus else None
-        if student_id is None:
+        student_ids = self._active_bus_to_student.get(bus) if bus else None
+        if not student_ids:
             # Debug, not silent: if this fires a lot, `bus` not matching any
             # value in _active_bus_to_student (e.g. a name-format mismatch
             # between /api/student's activeVehicle and the hub's
@@ -185,26 +192,30 @@ class MyRideCoordinator(DataUpdateCoordinator[dict[str, StudentSnapshot]]):
                 sorted(self._active_bus_to_student),
             )
             return
-        current = (self.data or {}).get(student_id)
-        if current is None:
-            return
 
         log_time = loc.get("logTime")
-        changed = log_time != current.log_time
-        updated = replace(
-            current,
-            latitude=loc.get("latitude"),
-            longitude=loc.get("longitude"),
-            heading=loc.get("heading"),
-            speed=loc.get("speed"),
-            log_time=log_time,
-            log_time_changed_at=self.hass.loop.time()
-            if changed
-            else current.log_time_changed_at,
-        )
         new_data = dict(self.data or {})
-        new_data[student_id] = updated
-        self.async_set_updated_data(new_data)
+        any_updated = False
+        for student_id in student_ids:
+            current = new_data.get(student_id)
+            if current is None:
+                continue
+            changed = log_time != current.log_time
+            new_data[student_id] = replace(
+                current,
+                latitude=loc.get("latitude"),
+                longitude=loc.get("longitude"),
+                heading=loc.get("heading"),
+                speed=loc.get("speed"),
+                log_time=log_time,
+                log_time_changed_at=self.hass.loop.time()
+                if changed
+                else current.log_time_changed_at,
+            )
+            any_updated = True
+
+        if any_updated:
+            self.async_set_updated_data(new_data)
 
     def _on_event(self, target: str, arguments: list[Any]) -> None:
         LOGGER.debug("Unhandled MyRide hub event %s: %s", target, arguments)
